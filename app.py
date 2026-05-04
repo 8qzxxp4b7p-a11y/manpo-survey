@@ -1,17 +1,22 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import os
+from streamlit_gsheets import GSheetsConnection
 
-# --- 🌟 설정: 관리자 비밀번호 🌟 ---
+# --- 🌟 설정 🌟 ---
 ADMIN_PASSWORD = "0129"
-DATA_FILE = "survey_results.csv"
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/14jEW_hjXXROFQ8ncrSJ35LBH_rlTiAVjq3AMnqbCXEE/edit?usp=sharing"
 OPTIONS = ["매우 만족", "만족", "보통", "불만", "매우 불만"]
 
+st.set_page_config(page_title="만포대체력단련장 설문조사", layout="centered")
+
+# 구글 시트 연결 설정
+conn = st.connection("gsheets", type=GSheetsConnection)
+
 def load_data():
-    if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
-    else:
+    try:
+        return conn.read(spreadsheet=GOOGLE_SHEET_URL)
+    except:
         columns = ["날짜", "이름", "전화번호", "직원서비스", "직원_사유", "식당", "식당_사유", "락카", "락카_사유", "코스", "코스_사유", "경기진행", "경기_사유"]
         return pd.DataFrame(columns=columns)
 
@@ -21,8 +26,6 @@ def create_question(label, key):
     if choice in ["불만", "매우 불만"]:
         reason = st.text_input(f"'{label}'에 대한 불만 사유를 적어주세요.", key=f"{key}_reason")
     return choice, reason
-
-st.set_page_config(page_title="만포대체력단련장 설문조사", layout="centered")
 
 is_admin = st.query_params.get("admin") == "true"
 
@@ -68,7 +71,8 @@ if not is_admin:
             }
             df = load_data()
             df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-            df.to_csv(DATA_FILE, index=False, encoding='utf-8-sig')
+            # 구글 시트에 업데이트
+            conn.update(spreadsheet=GOOGLE_SHEET_URL, data=df)
             st.success("설문이 성공적으로 제출되었습니다. 감사합니다!")
 
 # ==========================================================
@@ -81,7 +85,6 @@ else:
         st.session_state.authenticated = False
         st.session_state.pwd_error = False
 
-    # --- 🌟 수정된 부분: 비밀번호 확인 함수 생성 ---
     def check_password():
         if st.session_state.pwd_input == ADMIN_PASSWORD:
             st.session_state.authenticated = True
@@ -90,15 +93,10 @@ else:
             st.session_state.pwd_error = True
 
     if not st.session_state.authenticated:
-        # on_change: 입력칸에서 엔터를 치면 check_password 함수 실행
         st.text_input("관리자 비밀번호를 입력하세요:", type="password", key="pwd_input", on_change=check_password)
-        
-        # on_click: 버튼을 마우스로 누르면 check_password 함수 실행
         st.button("확인", on_click=check_password)
-        
         if st.session_state.pwd_error:
             st.error("비밀번호가 틀렸습니다.")
-    # --------------------------------------------------------
     else:
         if st.button("로그아웃"):
             st.session_state.authenticated = False
@@ -112,7 +110,6 @@ else:
             st.info("아직 제출된 설문 결과가 없습니다.")
         else:
             df['날짜(일자)'] = df['날짜'].astype(str).str.split(' ').str[0]
-            
             show_all = st.checkbox("모든 날짜의 누적 결과 보기")
             
             if show_all:
@@ -123,24 +120,12 @@ else:
                 selected_date_str = selected_date.strftime("%Y-%m-%d")
                 filtered_df = df[df['날짜(일자)'] == selected_date_str]
                 
-            st.dataframe(filtered_df.drop(columns=['날짜(일자)']), use_container_width=True)
+            st.dataframe(filtered_df.drop(columns=['날짜(일자)'], errors='ignore'), use_container_width=True)
             
-            st.markdown("---")
-            if filtered_df.empty:
-                st.warning(f"선택하신 날짜({selected_date_str})에는 제출된 설문이 없습니다.")
-            else:
+            if not filtered_df.empty:
                 st.write(f"### 📊 '{selected_date_str}' 항목별 만족도 요약")
                 questions = ["직원서비스", "식당", "락카", "코스", "경기진행"]
                 for q in questions:
                     st.write(f"**{q}**")
                     counts = filtered_df[q].value_counts().reindex(OPTIONS, fill_value=0)
                     st.bar_chart(counts)
-                    
-                st.markdown("---")
-                st.write(f"### 🚨 '{selected_date_str}' 불만/매우 불만 접수 사유")
-                for q in questions:
-                    reason_col = f"{q[:2]}_사유" if q not in ["직원서비스", "경기진행"] else ("직원_사유" if q == "직원서비스" else "경기_사유")
-                    reasons = filtered_df[filtered_df[reason_col] != ""][["날짜", "이름", reason_col]]
-                    if not reasons.empty:
-                        st.write(f"**{q} 관련 사유**")
-                        st.dataframe(reasons, use_container_width=True)
